@@ -1,0 +1,97 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  }
+  h1, h2, h3, h4, h5, h6, .font-display {
+    font-family: 'Outfit', 'Plus Jakarta Sans', system-ui, sans-serif;
+  }
+}
+
+  .notification-container {
+    /* Fixed notification layer. Toasts are absolutely positioned inside it
+       and overlap one another (newest on top via dynamic z-index). */
+    position: fixed;
+    z-index: 100;
+    inset-inline-end: calc(1rem + env(safe-area-inset-right, 0px));
+    bottom: calc(5rem + env(safe-area-inset-bottom, 0px));
+    width: min(24rem, calc(100vw - 2rem - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
+    height: 0;
+    overflow: visible;
+    pointer-events: none;
+  }
+
+  .notification-toast {
+    position: absolute;
+    inset-inline-end: 0;
+    bottom: 0;
+    width: 100%;
+  }
+
+  .marketly-toast-enter {
+    animation: marketly-toast-enter 180ms ease-out both;
+  }
+
+  @keyframes marketly-toast-enter {
+    from {
+      opacity: 0;
+      transform: translate(
+        calc(var(--toast-x, 0rem) + 0.75rem),
+        var(--toast-y, 0rem)
+      );
+    }
+    to {
+      opacity: 1;
+      transform: translate(var(--toast-x, 0rem), var(--toast-y, 0rem));
+    }
+  }
+
+  @media (min-width: 768px) {
+    .notification-container {
+      bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px));
+    }
+  }
+
+  .marketly-toast-countdown {
+    transform-origin: right;
+    animation-name: marketly-toast-countdown;
+    animation-timing-function: linear;
+    animation-fill-mode: forwards;
+    will-change: transform;
+  }
+
+  @keyframes marketly-toast-countdown {
+    from {
+      transform: scaleX(1);
+    }
+    to {
+      transform: scaleX(0);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .marketly-toast-enter {
+      animation: none;
+    }
+    /* Countdown bar still indicates remaining lifetime, but without motion. */
+    .marketly-toast-countdown {
+      animation-name: none !important;
+    }
+  }
+
+  /* Custom scrollbars for clean luxury feel */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.6);
+}
