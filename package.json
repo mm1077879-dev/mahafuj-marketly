@@ -7,7 +7,7 @@
     "dev": "tsx server.ts",
     "build": "vite build",
     "start": "tsx server.ts",
-    "test": "node --import tsx --test src/services/crossLingualSearch.test.ts src/store/slices/uiSlice.test.ts src/server/utils/orderAccess.test.ts src/server/services/emailService.test.ts",
+    "test": "node --import tsx --test src/services/api.test.ts src/services/crossLingualSearch.test.ts src/store/slices/uiSlice.test.ts src/server/utils/orderAccess.test.ts src/server/services/emailService.test.ts src/server/controllers/authController.test.ts",
     "test:search": "node --import tsx --test src/services/crossLingualSearch.test.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist",

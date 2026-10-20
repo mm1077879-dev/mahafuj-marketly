@@ -10,12 +10,6 @@ import { JWT_SECRET } from '../config/jwt';
 import { getConfiguredAppUrl, isConfiguredOAuthValue } from '../config/oauthConfig';
 import { ADMIN_PASSWORD } from '../config/adminCredentials';
 import { User as UserType } from '../../types';
-import {
-  sendVerificationEmail,
-  sendPasswordResetEmail,
-  generateSecureToken,
-  isRateLimited,
-} from '../services/emailService';
 
 const getAppUrl = (req: Request): string => {
   const configuredUrl = getConfiguredAppUrl();
@@ -28,6 +22,18 @@ const getAppUrl = (req: Request): string => {
   const protocol = req.protocol || 'http';
   const host = req.get('host') || 'localhost:3000';
   return `${protocol}://${host}`;
+};
+
+const getAuthStorageMode = (res: Response): 'database' | 'memory' | null => {
+  if (isDbConnected()) return 'database';
+  if (process.env.NODE_ENV !== 'production') return 'memory';
+
+  res.status(503).json({
+    success: false,
+    code: 'AUTH_STORAGE_UNAVAILABLE',
+    message: 'Authentication storage is temporarily unavailable. Please try again later.',
+  });
+  return null;
 };
 
 type OAuthProvider = 'google' | 'facebook';
@@ -107,14 +113,8 @@ const sendOAuthCallback = (req: Request, res: Response, provider: OAuthProvider)
 </html>`);
 };
 
-// In-memory verification & reset token store for preview fallback mode
-interface TokenRecord {
-  email: string;
-  token: string;
-  expires: number;
-}
-const memVerificationTokens = new Map<string, TokenRecord>();
-const memResetTokens = new Map<string, TokenRecord>();
+const EMAIL_DELIVERY_DISABLED_MESSAGE =
+  'Email delivery has been disabled in this Marketly deployment. Please contact support or your administrator for account access help.';
 
 // 1. Email/Password Registration
 export const register = async (req: Request, res: Response): Promise<void> => {
@@ -150,11 +150,10 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const verificationToken = generateSecureToken(32);
-    const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    const appUrl = getAppUrl(req);
+    const storageMode = getAuthStorageMode(res);
+    if (!storageMode) return;
 
-    if (isDbConnected()) {
+    if (storageMode === 'database') {
       const existing = await UserModel.findOne({ email: normalizedEmail });
       if (existing) {
         res.status(409).json({
@@ -168,17 +167,12 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       const user = await UserModel.create({
         name: name.trim(),
         email: normalizedEmail,
-        password, // pre-save hook will hash with bcrypt
+        password,
         role: 'customer',
         authProvider: 'local',
-        isEmailVerified: false,
-        emailVerificationToken: verificationToken,
-        emailVerificationExpires: verificationExpires,
+        isEmailVerified: true,
         addresses: [],
       });
-
-      // Send verification email via configured provider
-      await sendVerificationEmail(normalizedEmail, user.name, verificationToken, appUrl);
 
       const token = jwt.sign(
         { id: user._id, email: user.email, role: user.role, name: user.name },
@@ -190,7 +184,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
         actor: user.name,
         action: 'Account Registered',
         resource: 'Auth',
-        details: `Customer registered: ${user.email}. Verification email dispatched.`,
+        details: `Customer registered: ${user.email}. Email verification is disabled; account is active immediately.`,
       });
 
       res.status(201).json({
@@ -202,15 +196,14 @@ export const register = async (req: Request, res: Response): Promise<void> => {
           email: user.email,
           role: user.role,
           phone: user.phone,
-          isEmailVerified: false,
+          isEmailVerified: true,
           addresses: user.addresses,
         },
-        message: 'Account registered successfully. A verification email has been dispatched.',
+        message: 'Account registered successfully. Email delivery is disabled, so no verification email is sent.',
       });
       return;
     }
 
-    // In-Memory Mode
     const existingMem = memoryStore.users.find(
       (u) => u.email.toLowerCase() === normalizedEmail
     );
@@ -229,23 +222,14 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       id: 'usr_' + Date.now(),
       name: name.trim(),
       email: normalizedEmail,
-      role: 'customer', // strictly customer
+      role: 'customer',
       authProvider: 'local',
       passwordHash,
-      isEmailVerified: false,
+      isEmailVerified: true,
       addresses: [],
     };
 
     memoryStore.users.push(newUser);
-
-    // Save token in memory map
-    memVerificationTokens.set(verificationToken, {
-      email: normalizedEmail,
-      token: verificationToken,
-      expires: verificationExpires.getTime(),
-    });
-
-    await sendVerificationEmail(normalizedEmail, newUser.name, verificationToken, appUrl);
 
     const token = jwt.sign(
       { id: newUser.id, email: newUser.email, role: newUser.role, name: newUser.name },
@@ -257,7 +241,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       newUser.name,
       'Account Registered',
       'Auth',
-      `Customer registered: ${newUser.email}. Verification token generated.`
+      `Customer registered: ${newUser.email}. Email verification is disabled; account is active immediately.`
     );
 
     const { passwordHash: _, ...safeUser } = newUser;
@@ -266,7 +250,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       success: true,
       token,
       user: safeUser,
-      message: 'Account registered successfully. A verification email has been dispatched.',
+      message: 'Account registered successfully. Email delivery is disabled, so no verification email is sent.',
     });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
@@ -277,12 +261,12 @@ export const register = async (req: Request, res: Response): Promise<void> => {
 export const login = async (req: Request, res: Response): Promise<void> => {
   try {
     const { email, password } = req.body;
-    if (!email || !password) {
+    if (typeof email !== 'string' || !email.trim() || typeof password !== 'string' || !password) {
       res.status(400).json({ success: false, message: 'Email and password are required.' });
       return;
     }
 
-    const normalizedEmail = String(email).toLowerCase().trim();
+    const normalizedEmail = email.toLowerCase().trim();
 
     const adminEnvEmail = (process.env.ADMIN_EMAIL || 'admin@marketly.com').toLowerCase().trim();
     const adminEnvPassword = ADMIN_PASSWORD;
@@ -306,17 +290,11 @@ export const login = async (req: Request, res: Response): Promise<void> => {
         return;
       }
 
-      const isMatch = (normalizedEmail === adminEnvEmail && adminEnvPassword && password === adminEnvPassword)
-        || (await user.comparePassword(password));
+      const isMatch = await user.comparePassword(password);
 
       if (!isMatch) {
         res.status(401).json({ success: false, message: 'Invalid email or password.' });
         return;
-      }
-
-      // If user matched env password directly, update hashed password
-      if (normalizedEmail === adminEnvEmail && adminEnvPassword && password === adminEnvPassword && user.isModified('password')) {
-        await user.save();
       }
 
       const token = jwt.sign(
@@ -374,18 +352,11 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // Admin env password comparison or bcrypt hash comparison
-    const isDirectAdminMatch = normalizedEmail === adminEnvEmail && adminEnvPassword && password === adminEnvPassword;
     const isHashMatch = user.passwordHash ? bcrypt.compareSync(password, user.passwordHash) : false;
 
-    if (!isDirectAdminMatch && !isHashMatch) {
+    if (!isHashMatch) {
       res.status(401).json({ success: false, message: 'Invalid email or password.' });
       return;
-    }
-
-    // Keep passwordHash in sync with active admin password
-    if (isDirectAdminMatch && (!user.passwordHash || !isHashMatch)) {
-      user.passwordHash = bcrypt.hashSync(adminEnvPassword, 10);
     }
 
     const token = jwt.sign(
@@ -414,307 +385,51 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 };
 
 // 3. Email Verification Handler
-export const verifyEmail = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { token } = req.body;
-    if (!token || typeof token !== 'string') {
-      res.status(400).json({ success: false, message: 'Verification token is required.' });
-      return;
-    }
-
-    const cleanToken = token.trim();
-
-    if (isDbConnected()) {
-      const user = await UserModel.findOne({
-        emailVerificationToken: cleanToken,
-        emailVerificationExpires: { $gt: new Date() },
-      });
-
-      if (!user) {
-        res.status(400).json({
-          success: false,
-          message: 'Invalid, expired, or previously used verification token.',
-        });
-        return;
-      }
-
-      user.isEmailVerified = true;
-      user.emailVerificationToken = undefined;
-      user.emailVerificationExpires = undefined;
-      await user.save();
-
-      await AuditLogModel.create({
-        actor: user.name,
-        action: 'Email Verified',
-        resource: 'Auth',
-        details: `Customer verified email: ${user.email}`,
-      });
-
-      res.json({
-        success: true,
-        message: 'Your email address has been successfully verified.',
-        user: {
-          id: user._id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          isEmailVerified: true,
-        },
-      });
-      return;
-    }
-
-    // In-memory verification
-    const record = memVerificationTokens.get(cleanToken);
-    if (!record || record.expires < Date.now()) {
-      res.status(400).json({
-        success: false,
-        message: 'Invalid, expired, or previously used verification token.',
-      });
-      return;
-    }
-
-    const memUser = memoryStore.users.find(
-      (u) => u.email.toLowerCase() === record.email.toLowerCase()
-    );
-
-    if (memUser) {
-      memUser.isEmailVerified = true;
-    }
-
-    // Invalidate single-use token
-    memVerificationTokens.delete(cleanToken);
-
-    memoryStore.logAudit(
-      memUser?.name || 'Customer',
-      'Email Verified',
-      'Auth',
-      `Customer verified email: ${record.email}`
-    );
-
-    res.json({
-      success: true,
-      message: 'Your email address has been successfully verified.',
-      user: memUser ? { ...memUser, passwordHash: undefined } : undefined,
-    });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+export const verifyEmail = async (_req: Request, res: Response): Promise<void> => {
+  res.status(410).json({
+    success: false,
+    code: 'EMAIL_VERIFICATION_DISABLED',
+    message: 'Email verification has been disabled because outbound email delivery is no longer available.',
+  });
 };
 
-// 4. Resend Verification Email (Rate-Limited to 1 per 60 seconds)
+// 4. Resend Verification Email (Route retained as a compatibility stub)
 export const resendVerificationEmail = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { email } = req.body;
-    if (!email || typeof email !== 'string') {
-      res.status(400).json({ success: false, message: 'Valid email address is required.' });
-      return;
-    }
-
-    const normalizedEmail = email.toLowerCase().trim();
-
-    // Enforce 60-second rate limiting
-    if (isRateLimited(normalizedEmail, 60)) {
-      res.status(429).json({
-        success: false,
-        message: 'Please wait at least 60 seconds before requesting another verification email.',
-      });
-      return;
-    }
-
-    const verificationToken = generateSecureToken(32);
-    const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    const appUrl = getAppUrl(req);
-
-    if (isDbConnected()) {
-      const user = await UserModel.findOne({ email: normalizedEmail });
-      if (!user) {
-        // Protect privacy: do not reveal whether account exists
-        res.json({
-          success: true,
-          message: 'If an account exists with this email, a verification link has been dispatched.',
-        });
-        return;
-      }
-
-      if (user.isEmailVerified) {
-        res.json({ success: true, message: 'This email address is already verified.' });
-        return;
-      }
-
-      user.emailVerificationToken = verificationToken;
-      user.emailVerificationExpires = verificationExpires;
-      await user.save();
-
-      await sendVerificationEmail(normalizedEmail, user.name, verificationToken, appUrl);
-
-      res.json({
-        success: true,
-        message: 'A fresh verification email has been dispatched to your inbox.',
-      });
-      return;
-    }
-
-    // In-memory
-    const memUser = memoryStore.users.find(
-      (u) => u.email.toLowerCase() === normalizedEmail
-    );
-
-    if (memUser && !memUser.isEmailVerified) {
-      memVerificationTokens.set(verificationToken, {
-        email: normalizedEmail,
-        token: verificationToken,
-        expires: verificationExpires.getTime(),
-      });
-      await sendVerificationEmail(normalizedEmail, memUser.name, verificationToken, appUrl);
-    }
-
-    res.json({
-      success: true,
-      message: 'If an account exists with this email, a verification link has been dispatched.',
-    });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message });
+  const { email } = req.body;
+  if (!email || typeof email !== 'string') {
+    res.status(400).json({ success: false, message: 'Valid email address is required.' });
+    return;
   }
+
+  res.status(410).json({
+    success: false,
+    code: 'EMAIL_VERIFICATION_DISABLED',
+    message: `Email verification is disabled for ${String(email).trim()}. Outbound email delivery has been removed from the application.`,
+  });
 };
 
 // 5. Forgot Password Request
 export const forgotPassword = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { email } = req.body;
-    if (!email || typeof email !== 'string') {
-      res.status(400).json({ success: false, message: 'Email is required.' });
-      return;
-    }
-
-    const normalizedEmail = email.toLowerCase().trim();
-
-    if (isRateLimited(normalizedEmail, 60)) {
-      res.status(429).json({
-        success: false,
-        message: 'Please wait at least 60 seconds before requesting another reset link.',
-      });
-      return;
-    }
-
-    const resetToken = generateSecureToken(32);
-    const resetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
-    const appUrl = getAppUrl(req);
-
-    if (isDbConnected()) {
-      const user = await UserModel.findOne({ email: normalizedEmail });
-      if (user) {
-        user.resetPasswordToken = resetToken;
-        user.resetPasswordExpires = resetExpires;
-        await user.save();
-        await sendPasswordResetEmail(normalizedEmail, user.name, resetToken, appUrl);
-      }
-    } else {
-      const memUser = memoryStore.users.find(
-        (u) => u.email.toLowerCase() === normalizedEmail
-      );
-      if (memUser) {
-        memResetTokens.set(resetToken, {
-          email: normalizedEmail,
-          token: resetToken,
-          expires: resetExpires.getTime(),
-        });
-        await sendPasswordResetEmail(normalizedEmail, memUser.name, resetToken, appUrl);
-      }
-    }
-
-    // Always return neutral success message to prevent user enumeration attacks
-    res.json({
-      success: true,
-      message: 'If an account exists with this email, password reset instructions have been dispatched.',
-    });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message });
+  const { email } = req.body;
+  if (!email || typeof email !== 'string') {
+    res.status(400).json({ success: false, message: 'Email is required.' });
+    return;
   }
+
+  res.status(410).json({
+    success: false,
+    code: 'PASSWORD_RESET_DISABLED',
+    message: `Password reset email delivery is disabled for ${String(email).trim()}. Please contact support or your administrator to reset access.`,
+  });
 };
 
 // 6. Reset Password Handler
-export const resetPassword = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { token, newPassword } = req.body;
-    if (!token || !newPassword || typeof newPassword !== 'string' || newPassword.length < 6) {
-      res.status(400).json({
-        success: false,
-        message: 'Valid reset token and a password with at least 6 characters are required.',
-      });
-      return;
-    }
-
-    const cleanToken = token.trim();
-
-    if (isDbConnected()) {
-      const user = await UserModel.findOne({
-        resetPasswordToken: cleanToken,
-        resetPasswordExpires: { $gt: new Date() },
-      });
-
-      if (!user) {
-        res.status(400).json({
-          success: false,
-          message: 'Invalid, expired, or previously used password reset token.',
-        });
-        return;
-      }
-
-      user.password = newPassword; // Will be hashed by pre-save hook
-      user.resetPasswordToken = undefined;
-      user.resetPasswordExpires = undefined;
-      await user.save();
-
-      await AuditLogModel.create({
-        actor: user.name,
-        action: 'Password Reset',
-        resource: 'Auth',
-        details: `Password changed via secure reset token for: ${user.email}`,
-      });
-
-      res.json({
-        success: true,
-        message: 'Your password has been successfully reset. You may now sign in with your new credentials.',
-      });
-      return;
-    }
-
-    // In-memory reset
-    const record = memResetTokens.get(cleanToken);
-    if (!record || record.expires < Date.now()) {
-      res.status(400).json({
-        success: false,
-        message: 'Invalid, expired, or previously used password reset token.',
-      });
-      return;
-    }
-
-    const memUser = memoryStore.users.find(
-      (u) => u.email.toLowerCase() === record.email.toLowerCase()
-    );
-
-    if (memUser) {
-      const salt = bcrypt.genSaltSync(10);
-      memUser.passwordHash = bcrypt.hashSync(newPassword, salt);
-    }
-
-    memResetTokens.delete(cleanToken);
-
-    memoryStore.logAudit(
-      memUser?.name || 'Customer',
-      'Password Reset',
-      'Auth',
-      `Password changed via reset token for: ${record.email}`
-    );
-
-    res.json({
-      success: true,
-      message: 'Your password has been successfully reset. You may now sign in with your new credentials.',
-    });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+export const resetPassword = async (_req: Request, res: Response): Promise<void> => {
+  res.status(410).json({
+    success: false,
+    code: 'PASSWORD_RESET_DISABLED',
+    message: 'Password reset email delivery is disabled. Contact support or your administrator to reset access.',
+  });
 };
 
 // 7. Get Current Authenticated Profile

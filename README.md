@@ -6,6 +6,8 @@ Marketly is a React/Vite storefront served by an Express API. The production Exp
 
 **Prerequisites:** Node.js 20.19+ (Node 22 LTS recommended) and npm.
 
+This project uses npm with `package-lock.json` as its single dependency lockfile.
+
 1. Install dependencies with `npm ci`.
 2. Copy `.env.example` to `.env` and set the values for the services you want to use.
 3. Start the full-stack development server with `npm run dev`.
@@ -33,18 +35,18 @@ Set these server-side environment variables in Render:
 | `AUTH_SECRET` | Private JWT signing secret of at least 32 characters. |
 | `ADMIN_EMAIL` | Bootstrap administrator email. |
 | `ADMIN_PASSWORD` | Private bootstrap password of at least 12 characters. |
-| `APP_URL` | Public HTTPS origin used for OAuth/payment callbacks. |
+| `APP_URL` | Public HTTPS origin used for OAuth/payment callbacks and account verification/password-reset links. |
 
 Optional integrations, also configured only on the server:
 
-- **Email verification and password reset:** `RESEND_API_KEY`, and optionally `EMAIL_FROM`. Without a working Resend configuration, production email requests fail explicitly; no development outbox is reported as delivery.
+- **Email-based account recovery is disabled:** this deployment intentionally does not send verification or password-reset emails. Users register immediately as active members and should contact support or an administrator for account access help.
 - **Google sign-in:** `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`. Register `${APP_URL}/auth/callback/google`.
 - **Facebook sign-in:** `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`. Register `${APP_URL}/auth/callback/facebook`.
 - **Persistent image uploads:** `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. Render's local filesystem is not used as durable upload storage.
 - **Gemini features:** `GEMINI_API_KEY`.
 - **bKash hosted checkout:** `BKASH_APP_KEY`, `BKASH_APP_SECRET`, `BKASH_USERNAME`, `BKASH_PASSWORD`, and `BKASH_SANDBOX`. Keep sandbox mode enabled for testing; set it to `false` only with production merchant credentials. `APP_URL` must be the public HTTPS origin.
 
-Do not use `VITE_*` variables for secrets. The `.env.example` file contains placeholders only. Production startup fails if MongoDB, `AUTH_SECRET`, or a strong `ADMIN_PASSWORD` is unavailable. Sample catalog data is not inserted into production; populate the production catalog using the admin tools after connecting the database.
+Do not use `VITE_*` variables for secrets. The `.env.example` file contains placeholders only. Production startup fails if MongoDB, `AUTH_SECRET`, `ADMIN_EMAIL`, a public HTTPS `APP_URL`, or a strong `ADMIN_PASSWORD` is unavailable. Sample catalog data is not inserted into production; populate the production catalog using the admin tools after connecting the database.
 
 ## Authentication and social sign-in
 

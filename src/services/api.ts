@@ -15,6 +15,37 @@ import {
 
 const API_BASE = '/api/v1';
 
+interface AuthApiResponse {
+  success?: boolean;
+  message?: string;
+  code?: string;
+}
+
+const readAuthResponse = async <T extends AuthApiResponse>(response: Response): Promise<T> => {
+  if (!response.headers.get('content-type')?.toLowerCase().includes('application/json')) {
+    throw new Error('The server returned an unexpected response. Please try again later.');
+  }
+
+  let result: unknown;
+  try {
+    result = await response.json();
+  } catch {
+    throw new Error('The server returned an invalid response. Please try again later.');
+  }
+
+  if (typeof result !== 'object' || result === null || Array.isArray(result)) {
+    throw new Error('The server returned an invalid response. Please try again later.');
+  }
+  const responseBody = result as Record<string, unknown>;
+  if (typeof responseBody.success !== 'boolean') {
+    throw new Error('The server returned an invalid response. Please try again later.');
+  }
+  if ('message' in responseBody && typeof responseBody.message !== 'string') {
+    throw new Error('The server returned an invalid response. Please try again later.');
+  }
+  return result as T;
+};
+
 class ApiService {
   private getHeaders(): HeadersInit {
     const token = localStorage.getItem('marketly_token');
@@ -35,14 +66,20 @@ class ApiService {
   }
 
   // Authentication
-  async register(data: { name: string; email: string; password: string }): Promise<{ token: string; user: User }> {
+  async register(data: { name: string; email: string; password: string }): Promise<{ token: string; user: User; message?: string }> {
     const res = await fetch(`${API_BASE}/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
-    const result = await res.json();
-    if (!res.ok || !result.success) {
+    const result = await readAuthResponse<{ success: boolean; message?: string; token: string; user: User }>(res);
+    if (
+      !res.ok ||
+      !result.success ||
+      typeof result.token !== 'string' ||
+      typeof result.user !== 'object' ||
+      result.user === null
+    ) {
       throw new Error(result.message || 'Registration failed');
     }
     return result;
@@ -54,8 +91,14 @@ class ApiService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
-    const result = await res.json();
-    if (!res.ok || !result.success) {
+    const result = await readAuthResponse<{ success: boolean; message?: string; token: string; user: User }>(res);
+    if (
+      !res.ok ||
+      !result.success ||
+      typeof result.token !== 'string' ||
+      typeof result.user !== 'object' ||
+      result.user === null
+    ) {
       throw new Error(result.message || 'Login failed');
     }
     return result;
@@ -67,8 +110,8 @@ class ApiService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token }),
     });
-    const result = await res.json();
-    if (!res.ok || !result.success) {
+    const result = await readAuthResponse<{ success: boolean; message: string; user?: User }>(res);
+    if (!res.ok || !result.success || typeof result.message !== 'string') {
       throw new Error(result.message || 'Email verification failed');
     }
     return result;
@@ -80,8 +123,8 @@ class ApiService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email }),
     });
-    const result = await res.json();
-    if (!res.ok || !result.success) {
+    const result = await readAuthResponse<{ success: boolean; message: string }>(res);
+    if (!res.ok || !result.success || typeof result.message !== 'string') {
       throw new Error(result.message || 'Failed to resend verification email');
     }
     return result;
@@ -93,8 +136,8 @@ class ApiService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email }),
     });
-    const result = await res.json();
-    if (!res.ok || !result.success) {
+    const result = await readAuthResponse<{ success: boolean; message: string }>(res);
+    if (!res.ok || !result.success || typeof result.message !== 'string') {
       throw new Error(result.message || 'Failed to process password reset request');
     }
     return result;
@@ -106,8 +149,8 @@ class ApiService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token, newPassword }),
     });
-    const result = await res.json();
-    if (!res.ok || !result.success) {
+    const result = await readAuthResponse<{ success: boolean; message: string }>(res);
+    if (!res.ok || !result.success || typeof result.message !== 'string') {
       throw new Error(result.message || 'Password reset failed');
     }
     return result;

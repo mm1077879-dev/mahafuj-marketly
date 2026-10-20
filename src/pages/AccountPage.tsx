@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import {
   selectCurrentUser,
@@ -17,6 +17,7 @@ import { addNotification } from '../store/slices/uiSlice';
 import { BangladeshAddress, Order } from '../types';
 import { usePreferences } from '../services/preferences';
 import { api } from '../services/api';
+import { EmailActionPage } from '../components/auth/EmailActionPage';
 import {
   User,
   Package,
@@ -45,6 +46,7 @@ import {
 
 export const AccountPage: React.FC = () => {
   const dispatch = useAppDispatch();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const user = useAppSelector(selectCurrentUser);
   const isAdmin = useAppSelector(selectIsAdmin);
@@ -52,6 +54,14 @@ export const AccountPage: React.FC = () => {
   const orders = useAppSelector(selectAllOrders);
   const wishlistCount = useAppSelector(selectWishlistCount);
   const { formatPrice } = usePreferences();
+  const [emailActionTokens, setEmailActionTokens] = useState(() => ({
+    verificationToken:
+      searchParams.get('verifyToken') ??
+      new URLSearchParams(location.hash.slice(1)).get('verifyToken'),
+    resetToken:
+      searchParams.get('resetToken') ??
+      new URLSearchParams(location.hash.slice(1)).get('resetToken'),
+  }));
 
   const initialTab = searchParams.get('tab');
   const [activeTab, setActiveTab] = useState<'orders' | 'addresses' | 'security'>(
@@ -68,6 +78,16 @@ export const AccountPage: React.FC = () => {
       setActiveTab(tabParam);
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    const fragmentParams = new URLSearchParams(location.hash.slice(1));
+    const verificationToken =
+      searchParams.get('verifyToken') ?? fragmentParams.get('verifyToken');
+    const resetToken = searchParams.get('resetToken') ?? fragmentParams.get('resetToken');
+    if (verificationToken || resetToken) {
+      setEmailActionTokens({ verificationToken, resetToken });
+    }
+  }, [location.hash, searchParams]);
 
   const handleTabChange = (tab: 'orders' | 'addresses' | 'security') => {
     setActiveTab(tab);
@@ -150,6 +170,10 @@ export const AccountPage: React.FC = () => {
     }
     return true;
   });
+
+  if (emailActionTokens.verificationToken || emailActionTokens.resetToken) {
+    return <EmailActionPage {...emailActionTokens} />;
+  }
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 space-y-8">

@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 
 type OAuthProvider = 'google' | 'facebook';
+type AuthMode = 'login' | 'register' | 'forgot-password' | 'resend-verification';
 
 const getErrorMessage = (error: unknown, fallback: string): string =>
   error instanceof Error && error.message ? error.message : fallback;
@@ -34,7 +35,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   initialMode = 'login',
 }) => {
   const dispatch = useAppDispatch();
-  const [mode, setMode] = useState<'login' | 'register'>(initialMode);
+  const [mode, setMode] = useState<AuthMode>(initialMode);
 
   // Form Fields
   const [name, setName] = useState('');
@@ -159,7 +160,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         const provider = event.data.provider;
         const providerName =
           provider === 'google' ? 'Google' : provider === 'facebook' ? 'Facebook' : 'Social';
-        setErrorMessage(`${providerName} sign-in was cancelled or could not be completed.`);
+        const callbackError = typeof event.data.error === 'string' ? event.data.error : '';
+        if (callbackError === 'access_denied' || callbackError === 'cancelled') {
+          setErrorMessage(`${providerName} sign-in was cancelled.`);
+        } else if (callbackError === 'OAuth state validation failed.') {
+          setErrorMessage(`${providerName} sign-in could not be verified. Please try again.`);
+        } else if (callbackError) {
+          setErrorMessage(
+            `${providerName} could not complete sign-in. Check the provider client configuration and authorized callback URL.`
+          );
+        } else {
+          setErrorMessage(
+            `${providerName} did not return an authorization code. Check the provider callback configuration and try again.`
+          );
+        }
         setIsLoading(false);
         setActiveProvider(null);
       }
@@ -174,6 +188,38 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
+
+    if (mode === 'forgot-password' || mode === 'resend-verification') {
+      setIsLoading(true);
+      try {
+        const result =
+          mode === 'forgot-password'
+            ? await api.forgotPassword(email.trim())
+            : await api.resendVerification(email.trim());
+        dispatch(
+          addNotification({
+            type: 'success',
+            title: mode === 'forgot-password' ? 'Password Reset Request' : 'Verification Request',
+            message: result.message,
+            duration: 6000,
+          })
+        );
+        setPassword('');
+        setMode('login');
+      } catch (error: unknown) {
+        setErrorMessage(
+          getErrorMessage(
+            error,
+            mode === 'forgot-password'
+              ? 'Password reset could not be requested. Please try again.'
+              : 'Verification email could not be requested. Please try again.'
+          )
+        );
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
 
     if (mode === 'register') {
       if (!name.trim()) {
@@ -202,7 +248,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           addNotification({
             type: 'success',
             title: 'Account Created',
-            message: `Welcome to Marketly, ${result.user.name}!`,
+            message: result.message ?? `Account created for ${result.user.name}. You can sign in immediately.`,
             duration: 4000,
           })
         );
@@ -347,6 +393,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
           )}
 
+          {(mode === 'login' || mode === 'register') && (
           <div className="space-y-3">
             <div className="relative flex items-center justify-center">
               <div className="border-t border-slate-200 w-full" />
@@ -418,6 +465,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </button>
             </div>
           </div>
+          )}
+
+          {mode === 'forgot-password' && (
+            <p className="text-xs leading-relaxed text-slate-500">
+              Email-based account recovery is currently disabled. Please contact support or your administrator for access help.
+            </p>
+          )}
+          {mode === 'resend-verification' && (
+            <p className="text-xs leading-relaxed text-slate-500">
+              Verification links are unavailable in this deployment. Please contact support or your administrator for assistance.
+            </p>
+          )}
 
           {mode === 'register' && (
             <div>
@@ -458,31 +517,39 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
           </div>
 
-          <div>
-            <label htmlFor="auth-password" className="block text-xs font-bold text-slate-700 mb-1.5">
-              Password *
-            </label>
-            <div className="relative">
-              <Lock className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                id="auth-password"
-                type={showPassword ? 'text' : 'password'}
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Min. 6 characters"
-                className="w-full pl-11 pr-11 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20 transition-all"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-              >
-                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
+          {(mode === 'login' || mode === 'register') && (
+            <div>
+              <label htmlFor="auth-password" className="block text-xs font-bold text-slate-700 mb-1.5">
+                Password *
+              </label>
+              <div className="relative">
+                <Lock className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  id="auth-password"
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Min. 6 characters"
+                  className="w-full pl-11 pr-11 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20 transition-all"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
             </div>
-          </div>
+          )}
+
+          {mode === 'login' && (
+            <div className="text-xs text-slate-500">
+              Account recovery is currently unavailable. Please contact support or your administrator for help accessing your account.
+            </div>
+          )}
 
           {mode === 'register' && (
             <div className="flex items-start gap-2 pt-1">
@@ -522,6 +589,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <span>Complete Registration</span>
                 <ArrowRight className="w-4 h-4" />
               </>
+            ) : mode === 'forgot-password' ? (
+              <span>Request Password Reset</span>
+            ) : mode === 'resend-verification' ? (
+              <span>Resend Verification Link</span>
             ) : (
               <>
                 <span>Sign In to Account</span>
@@ -534,6 +605,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
         {/* Footer switcher — the primary authentication switcher */}
         <div className="sticky bottom-0 bg-slate-50/95 backdrop-blur-sm rounded-b-2xl sm:rounded-b-3xl border-t border-slate-100 px-6 sm:px-10 py-4">
+          {(mode === 'login' || mode === 'register') ? (
+            <>
           <div
             className="grid grid-cols-2 gap-1 p-1 bg-white border border-slate-200 rounded-xl"
             role="tablist"
@@ -577,6 +650,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               ? 'Already have an account? Switch to Sign In above.'
               : "Don't have an account yet? Switch to Create Account above."}
           </p>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setMode('login');
+                setErrorMessage(null);
+              }}
+              className="w-full py-2.5 text-xs sm:text-sm font-bold text-blue-600 hover:underline"
+            >
+              Back to sign in
+            </button>
+          )}
         </div>
       </div>
     </div>

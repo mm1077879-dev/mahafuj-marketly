@@ -1,28 +1,33 @@
-import assert from 'node:assert/strict';
+﻿import assert from 'node:assert/strict';
 import test from 'node:test';
-import { sendPasswordResetEmail, sendVerificationEmail } from './emailService';
+import {
+  emailOutbox,
+  generateSecureToken,
+  hashSecureToken,
+  isRateLimited,
+  sendPasswordResetEmail,
+  sendVerificationEmail,
+} from './emailService';
 
-test('production email workflows fail instead of reporting outbox delivery', async () => {
-  const previousEnvironment = process.env.NODE_ENV;
-  const previousApiKey = process.env.RESEND_API_KEY;
+test('email helpers still generate deterministic hash values for disabled transactional flows', async () => {
+  const token = generateSecureToken(16);
+  assert.equal(hashSecureToken(token), hashSecureToken(token));
+  assert.equal(token.length, 32);
+  assert.equal(isRateLimited('reset@example.test'), false);
+  assert.equal(emailOutbox.length, 0);
+});
 
-  process.env.NODE_ENV = 'production';
-  delete process.env.RESEND_API_KEY;
+test('verification and reset helpers fail closed without consulting any provider or outbox', async () => {
+  const verificationResult = await sendVerificationEmail('buyer@example.test', 'verification-token', 'https://marketly.example');
+  assert.equal(verificationResult.success, false);
+  assert.equal(verificationResult.mode, 'disabled');
+  assert.match(verificationResult.message, /Email verification has been disabled/i);
 
-  try {
-    await assert.rejects(
-      sendVerificationEmail('buyer@example.com', 'Buyer', 'verification-token', 'https://marketly.example'),
-      /RESEND_API_KEY/
-    );
-    await assert.rejects(
-      sendPasswordResetEmail('buyer@example.com', 'Buyer', 'reset-token', 'https://marketly.example'),
-      /RESEND_API_KEY/
-    );
-  } finally {
-    if (previousEnvironment === undefined) delete process.env.NODE_ENV;
-    else process.env.NODE_ENV = previousEnvironment;
+  const resetResult = await sendPasswordResetEmail('buyer@example.test', 'Buyer', 'reset-token', 'https://marketly.example');
+  assert.equal(resetResult.success, false);
+  assert.equal(resetResult.mode, 'disabled');
+  assert.match(resetResult.message, /Password reset email delivery has been disabled/i);
 
-    if (previousApiKey === undefined) delete process.env.RESEND_API_KEY;
-    else process.env.RESEND_API_KEY = previousApiKey;
-  }
+  assert.equal(emailOutbox.length, 0);
+  assert.equal(isRateLimited('buyer@example.test'), false);
 });
